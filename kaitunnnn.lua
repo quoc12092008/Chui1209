@@ -1,5 +1,5 @@
 
-local KT_VERSION = "1.22.0"
+local KT_VERSION = "1.23.0"
 
 --==============================================================================
 -- 1. SERVICES
@@ -175,6 +175,16 @@ local CFG = {
 		Interval  = 3.2,     -- PlayTower debounce 3s, TowerService.lua
 		Mode      = "auto",  -- "auto" = tự chọn tower lời nhất | "fixed"
 		Fixed     = "Dragon Tower",
+		-- CHỈ CHẠY NHỮNG TOWER CÓ TÊN Ở ĐÂY. Để rỗng {} = tự chọn trong mọi tower.
+		-- Gõ trong config_kaitun.lua, khỏi sửa code. Vd: Only = { "Infinity Tower" }
+		-- Không phân biệt hoa/thường; gõ thiếu ("infinity") cũng được nếu chỉ khớp 1 tower.
+		-- Tên thật (source 2026-10-06): Infinity Tower, Dragon Tower, Cursed Tower,
+		-- Pirate Tower, Hidden Leaf Tower, Slayer Tower, Shadow Tower.
+		Only      = {},
+		-- Game có AutoTower GỐC: TowerController.lua:687 tự startTower 3 giây sau khi
+		-- vào game nếu data AutoTower có tên -> đá nhau với vòng tower của kaitun.
+		-- true = kaitun tắt cái đó đi (SetAutoTower(false)) để chỉ còn 1 bên chạy.
+		DisableGameAuto = true,
 		MinFloors = 5,       -- không vào tower nếu mô phỏng qua chưa nổi 5 tầng
 		AutoTeam  = true,    -- EquipBestTowerTeam trước mỗi lượt
 		-- MỖI TOWER RƠI 1 BỘ BOOST RIÊNG và các bộ này là CATEGORY KHÁC NHAU
@@ -195,6 +205,27 @@ local CFG = {
 		BoostBeforeRun = true,
 	},
 
+	-- ===== Điểm rebirth (source 2026-10-06) =====
+	-- Mỗi rebirth cho 1 điểm (RebirthService.lua:56: Rebirth() - tổng đã cộng).
+	-- Damage cộng kiểu NHÂN: x(1 + 0.1 * số điểm), nhân dồn với gear/boost.
+	-- Tên stat hợp lệ (RebirthStatsConfig): Luck, Money, Damage, Health,
+	-- Trait Luck, Grade Luck.
+	-- KHÔNG BAO GIỜ gọi UseResetToken (tiêu Reset Token để reset điểm).
+	RebirthStats = {
+		Enabled    = true,
+		Interval   = 5,
+		Stat       = "Damage",  -- dồn hết điểm vào stat này
+		MaxPerTick = 20,        -- server debounce 0.1s, mỗi lượt cộng tối đa ngần này điểm
+	},
+
+	-- ===== Gear (source 2026-10-06) =====
+	-- 5 ô: Head, Torso, Back, Upper, Waist. Mỗi ô đeo gear RARITY CAO NHẤT đang có
+	-- (Rare < Legendary < Divine). Cùng rarity thì chọn cái buff mạnh hơn.
+	Gear = {
+		Enabled  = true,
+		Interval = 6,
+	},
+
 	-- ===== Reward + code =====
 	Rewards = {
 		Enabled = true, Interval = 30,
@@ -204,9 +235,10 @@ local CFG = {
 	Codes = {
 		Enabled  = true,
 		Interval = 120,   -- thử lại định kỳ, code đã nhận rồi thì bỏ qua
-		-- Dump AnimeDice (MonetizationConfig.Codes) mới có 6 code: RELEASE, UPDATE1-3, 1KCCU, 5KCCU.
-		-- 6 code còn lại do chồng đưa, CHƯA XÁC NHẬN TRONG SOURCE; server tự báo "Invalid code."
-		-- nếu sai nên vẫn an toàn, và MaxTries ở dưới chặn việc thử lại mãi.
+		-- Source 2026-10-06: code chuyển sang Framework/Features/Codes/CodesConfig
+		-- (17 code). UseGameList = true thì đọc LIVE danh sách đó rồi gộp với List
+		-- dưới đây -> game thêm code mới là bot tự nhập, khỏi sửa config.
+		UseGameList = true,
 		List = { "100KLIKES", "40KCCU", "30KCCU", "UPDATE4", "20KCCU", "10KCCU",
 			"5KCCU", "1KCCU", "UPDATE3", "UPDATE2", "UPDATE1", "RELEASE" },
 		MaxTries = 3,     -- thử 1 code quá ngần này lần mà vẫn chưa nhận được thì bỏ qua
@@ -285,9 +317,10 @@ local CFG = {
 		Enabled = true, Interval = 0.4, Reserve = 0,
 		-- Danh sách món đọc LIVE từ Mods.QuestConfig.Shop lúc chạy, không phải
 		-- từ dump, nên game update thêm món mới là bot nhận ngay.
-		-- (Dump trong repo còn cũ, chưa có Jackpot Spin; game đã update rồi.)
+		-- Source 2026-10-06: Jackpot Spin ĐÃ BỊ GỠ khỏi shop (thay bằng Reset Token
+		-- 50 vé). Lucky Spin còn, 10 vé / 1 cái.
 		-- Tên nào không có trong shop live thì bot kêu 1 lần rồi bỏ qua.
-		Items = { "Jackpot Spin" }, -- đổi thành gì thì sửa danh sách này
+		Items = { "Lucky Spin" }, -- đổi thành gì thì sửa danh sách này
 		Mode  = "rotate",        -- "rotate" = xoay vòng đều | "priority" = ưu tiên từ trên xuống
 		AllowGamepass = false,   -- true mới cho đổi vé lấy gamepass (giá vé rất cao)
 	},
@@ -447,10 +480,12 @@ if not Network then
 	return
 end
 
-local function rem(path)
+-- t = số giây chờ mỗi đoạn. Remote MỚI để ngắn: chạy trên bản game cũ thì
+-- không phải đứng chờ 15s/remote.
+local function rem(path, t)
 	local cur = Network
 	for seg in string.gmatch(path, "[^%.]+") do
-		cur = waitChild(cur, seg, 15)
+		cur = waitChild(cur, seg, t or 15)
 		if not cur then return nil end
 	end
 	return cur
@@ -476,7 +511,9 @@ local Net = {
 	CompleteFloor= rem("Towers.RF.CompleteTowerFloor"),
 	CancelTower  = rem("Towers.RF.CancelTower"),
 	BestTeam     = rem("Towers.RE.EquipBestTowerTeam"),
-	RedeemCode   = rem("MonetizationService.RE.RedeemCode"),
+	-- Source 2026-10-06: MonetizationService.RE.RedeemCode ĐÃ BỊ XOÁ, dời sang
+	-- CodesService. Tham số giữ nguyên (code: string).
+	RedeemCode   = rem("CodesService.RE.RedeemCode", 5),
 	DailyClaim   = rem("DailyRewardService.RE.Claim"),
 	GroupClaim   = rem("GroupRewardService.RE.Claim"),
 	OfflineClaim = rem("OfflineEarningsService.RE.Claim"),
@@ -484,6 +521,11 @@ local Net = {
 	BoostUse     = rem("BoostService.RE.Use"),
 	SpinUse      = rem("SpinService.RE.Use"),
 	QuestBuy     = rem("QuestService.RE.Buy"),
+	-- Source 2026-10-06
+	AddStat      = rem("RebirthService.RE.AddStat", 5),   -- (statName)
+	GearEquip    = rem("GearService.RE.Equip", 5),        -- (slot, gearName)
+	SetAutoTower = rem("Towers.RE.SetAutoTower", 5),      -- (towerName | false)
+	-- CỐ Ý KHÔNG nối RebirthService.RE.UseResetToken: tiêu Reset Token để reset điểm.
 	-- CỐ Ý KHÔNG nối remote roll trait / roll grade:
 	-- bot KHÔNG BAO GIỜ tiêu Trait Reroll / Gems (chồng để dành, tự dùng tay).
 }
@@ -511,6 +553,8 @@ req("Framework.Features.Upgrades.Upgrades",                      "Upgrades")
 req("Framework.Features.Upgrades.TreeStructure",                 "Tree")
 req("Framework.Features.Rolling.Dice",                           "Dice")
 req("Framework.Features.Rebirth.Rebirths",                       "Rebirths")
+req("Framework.Features.Rebirth.RebirthStatsConfig",             "RebirthStatsCfg")
+req("Framework.Features.Codes.CodesConfig",                      "CodesCfg")
 req("Framework.Features.Plot.PlotConfig",                        "PlotConfig")
 req("Framework.Features.Plot.PlotController",                    "PlotC")
 req("Framework.Features.Towers.Towers",                          "Towers")
@@ -599,7 +643,7 @@ end
 -- Mỗi vòng lặp thuộc 1 nhóm lớn; tắt nhóm là cả cụm ngừng chạy.
 local GROUP_OF = {
 	Roll = "Farm", Collect = "Farm", Plot = "Farm", LevelUp = "Farm", Sell = "Farm",
-	Economy = "Economy",
+	Economy = "Economy", RebirthStats = "Economy", Gear = "Economy",
 	Tower = "Content", Quest = "Content", Rewards = "Content", Codes = "Content",
 	Boost = "Content", Tickets = "Content",
 	Keep = "Utility", Webhook = "Utility", Cleanup = "Utility", Swap = "Utility",
@@ -2992,8 +3036,12 @@ function UI.refreshOverlay()
 
 	local rb = Util.data("Rebirth", 0)
 	local nxt = Mods.Rebirths and select(2, pcall(Mods.Rebirths.GetNext, rb)) or nil
-	set("rebirth", rb .. ((type(nxt) == "table" and nxt.cost)
-		and ("  -> " .. Util.fmt(nxt.cost)) or "  (hết)"))
+	local rbTxt = rb .. ((type(nxt) == "table" and nxt.cost)
+		and ("  -> " .. Util.fmt(nxt.cost)) or "  (hết)")
+	if RT.rebirthStatNow and RT.rebirthStatNow > 0 then
+		rbTxt = rbTxt .. "  · " .. tostring(CFG.RebirthStats.Stat) .. " " .. RT.rebirthStatNow
+	end
+	set("rebirth", rbTxt)
 
 	set("luck", "x" .. Util.fmt(Util.buff("Luck", 1)))
 	set("dice", tostring(Util.data("Dice", "?")))
@@ -3696,6 +3744,154 @@ function Eco.tick()
 end
 
 --==============================================================================
+-- 13b. MODULE: ĐIỂM REBIRTH  (RebirthService.AddStat — source 2026-10-06)
+--==============================================================================
+local RebirthStats = {}
+
+-- Điểm còn = Rebirth() - tổng đã cộng. Mỗi rebirth cho 1 điểm.
+-- (RebirthStatsConfig.GetRemaining, RebirthService.lua:56)
+function RebirthStats.remaining(rebirth, spent)
+	local used = 0
+	for _, v in pairs(type(spent) == "table" and spent or {}) do
+		used = used + (tonumber(v) or 0)
+	end
+	return math.max(0, math.floor((tonumber(rebirth) or 0) - used))
+end
+
+-- Tên stat có thật không (RebirthStatsConfig.Get). Thiếu module thì coi là không.
+function RebirthStats.valid(name)
+	if type(name) ~= "string" or name == "" then return false end
+	local cfg = Mods.RebirthStatsCfg
+	if type(cfg) ~= "table" or type(cfg.Get) ~= "function" then return false end
+	local ok, v = pcall(cfg.Get, name)
+	return ok and v ~= nil
+end
+
+function RebirthStats.names()
+	local out = {}
+	for _, v in ipairs((type(Mods.RebirthStatsCfg) == "table" and Mods.RebirthStatsCfg.Stats) or {}) do
+		if type(v) == "table" and v.name then out[#out + 1] = tostring(v.name) end
+	end
+	return out
+end
+
+function RebirthStats.tick()
+	local cfg = CFG.RebirthStats
+	if not cfg.Enabled then RT.status.RebirthStats = "tắt" return end
+	if not Net.AddStat then RT.status.RebirthStats = "game chưa có AddStat" return end
+	if not RebirthStats.valid(cfg.Stat) then
+		if not RT.statWarned then
+			RT.statWarned = true
+			Util.log("Rebirth", "KHÔNG có stat tên: " .. tostring(cfg.Stat)
+				.. " | chỉ có: " .. table.concat(RebirthStats.names(), ", "))
+		end
+		RT.status.RebirthStats = "tên stat sai: " .. tostring(cfg.Stat)
+		return
+	end
+	local spent = Util.data("RebirthStats", {}) or {}
+	local left = RebirthStats.remaining(Util.data("Rebirth", 0), spent)
+	RT.rebirthPointsLeft = left
+	RT.rebirthStatNow = tonumber(spent[cfg.Stat]) or 0
+	if left < 1 then
+		RT.status.RebirthStats = string.format("%s %d điểm, hết điểm", cfg.Stat, RT.rebirthStatNow)
+		return
+	end
+	local cap = math.max(1, math.floor(tonumber(cfg.MaxPerTick) or 20))
+	local n = 0
+	for _ = 1, math.min(left, cap) do
+		if not RT.running or not cfg.Enabled then break end
+		pcall(function() Net.AddStat:FireServer(cfg.Stat) end)
+		n = n + 1
+		task.wait(0.12)   -- server debounce AddRebirthStat 0.1s
+	end
+	Util.log("Rebirth", "cộng " .. n .. " điểm vào " .. cfg.Stat)
+	RT.status.RebirthStats = string.format("cộng %d điểm vào %s", n, cfg.Stat)
+end
+
+--==============================================================================
+-- 13c. MODULE: GEAR  (GearService.Equip — source 2026-10-06)
+--==============================================================================
+local Gear = {}
+
+-- Hạng rarity. Không biết rarity thì -1 để KHÔNG bao giờ thắng gear có rarity thật
+-- (Game.raritySort trả 99 cho tên lạ — dùng ở đây sẽ xếp nhầm lên đầu).
+function Gear.rankOf(rarity)
+	if not Mods.Rarities or type(rarity) ~= "string" then return -1 end
+	local ok, r = pcall(Mods.Rarities.Get, rarity)
+	if ok and type(r) == "table" and tonumber(r.sortOrder) then return tonumber(r.sortOrder) end
+	return -1
+end
+
+-- Phá hoà khi cùng rarity: tổng tác dụng buff.
+--   multiplier 1.5 -> 0.5 · percentage 0.3 -> 0.3 · base (walkspeed) -> 0
+function Gear.buffScore(cfg)
+	local s = 0
+	for _, b in pairs(type(cfg) == "table" and type(cfg.buffs) == "table" and cfg.buffs or {}) do
+		if type(b) == "table" then
+			local a = tonumber(b.amount) or 0
+			if b.bucket == "multiplier" then s = s + (a - 1)
+			elseif b.bucket == "percentage" then s = s + a end
+		end
+	end
+	return s
+end
+
+-- a có tốt hơn b không: rarity trước, rồi buff, rồi tên cho xác định.
+function Gear.better(a, b)
+	if not b then return true end
+	if a.rank ~= b.rank then return a.rank > b.rank end
+	if a.score ~= b.score then return a.score > b.score end
+	return a.name < b.name
+end
+
+-- Gear tốt nhất cho từng ô trong túi. Trả { [slot] = { name, rank, score } }.
+function Gear.plan(inv, getCfg, rankOf)
+	local best = {}
+	for _, e in pairs(inv or {}) do
+		if type(e) == "table" and type(e.name) == "string" and (tonumber(e.amount) or 0) > 0 then
+			local cfg = getCfg(e.name)
+			if type(cfg) == "table" and cfg.kind == "Gear" and type(cfg.slot) == "string" then
+				local cand = { name = e.name, slot = cfg.slot,
+					rank = rankOf(cfg.rarity), score = Gear.buffScore(cfg) }
+				if Gear.better(cand, best[cfg.slot]) then best[cfg.slot] = cand end
+			end
+		end
+	end
+	return best
+end
+
+function Gear.tick()
+	if not CFG.Gear.Enabled then RT.status.Gear = "tắt" return end
+	if not (Net.GearEquip and Mods.EntryRegistry) then
+		RT.status.Gear = "game chưa có GearService.Equip"
+		return
+	end
+	local getCfg = function(name)
+		local ok, c = pcall(Mods.EntryRegistry.getEntryConfig, name)
+		return ok and c or nil
+	end
+	local plan = Gear.plan(Game.inventory(), getCfg, Gear.rankOf)
+	local worn = Util.data("EquippedGear", {}) or {}
+	local slots = {}
+	for slot in pairs(plan) do slots[#slots + 1] = slot end
+	table.sort(slots)
+	local changed = 0
+	for _, slot in ipairs(slots) do
+		if not RT.running or not CFG.Gear.Enabled then break end
+		local want = plan[slot]
+		if worn[slot] ~= want.name then
+			pcall(function() Net.GearEquip:FireServer(slot, want.name) end)
+			Util.log("Gear", "đeo " .. want.name .. " vào ô " .. slot)
+			changed = changed + 1
+			task.wait(0.3)   -- server debounce EquipGear 0.25s
+		end
+	end
+	RT.gearSlots = #slots
+	RT.status.Gear = changed > 0 and ("vừa đeo " .. changed .. " món")
+		or (#slots > 0 and ("đã đeo đồ tốt nhất " .. #slots .. " ô") or "chưa có gear")
+end
+
+--==============================================================================
 -- 14. MODULE: TOWER
 --==============================================================================
 local Tower = {}
@@ -3850,10 +4046,55 @@ function Tower.boostNeed(tcfg, stock, running, maxFloor)
 	return need
 end
 
+-- Đổi tên chồng gõ thành tên tower thật.
+-- Khớp đúng -> khớp không phân biệt hoa thường -> chứa chuỗi (chỉ khi ra ĐÚNG 1 tower,
+-- để "tower" không khớp bừa cả 7 cái).
+function Tower.resolveName(name, all)
+	if type(name) ~= "string" or name == "" or type(all) ~= "table" then return nil end
+	if all[name] then return name end
+	local want = name:lower()
+	for real in pairs(all) do
+		if type(real) == "string" and real:lower() == want then return real end
+	end
+	local hit
+	for real in pairs(all) do
+		if type(real) == "string" and real:lower():find(want, 1, true) then
+			if hit then return nil end   -- mơ hồ: khớp từ 2 tower trở lên
+			hit = real
+		end
+	end
+	return hit
+end
+
+-- Chỉ giữ tower có tên trong CFG.Tower.Only. Rỗng = giữ hết.
+function Tower.allowed(all)
+	local only = CFG.Tower.Only
+	if type(only) ~= "table" or #only == 0 then return all end
+	local out, bad = {}, {}
+	for _, name in ipairs(only) do
+		local real = Tower.resolveName(name, all)
+		if real then out[real] = all[real] else bad[#bad + 1] = tostring(name) end
+	end
+	if #bad > 0 and not RT.towerOnlyWarned then
+		RT.towerOnlyWarned = true
+		local have = {}
+		for n in pairs(all) do have[#have + 1] = tostring(n) end
+		table.sort(have)
+		Util.log("Tower", "KHÔNG có tower tên: " .. table.concat(bad, ", ")
+			.. " | chỉ có: " .. table.concat(have, ", "))
+	end
+	return out
+end
+
 function Tower.pick()
 	if not Mods.Towers then return nil end
 	local okAll, all = pcall(Mods.Towers.GetAll)
 	if not okAll or type(all) ~= "table" then return nil end
+	all = Tower.allowed(all)
+	if next(all) == nil then
+		RT.towerWhy = "không có tower nào khớp Tower.Only"
+		return nil
+	end
 	local team = Tower.buildTeam()
 	if #team == 0 then return nil end
 	local stock = CFG.Tower.FarmBoosts and Game.boostStock() or {}
@@ -3875,7 +4116,9 @@ function Tower.pick()
 	end
 	RT.towerReports = reports
 	local chosen, quest = best, false
-	RT.towerWhy = "gems + reroll / thời gian dự kiến"
+	RT.towerWhy = (type(CFG.Tower.Only) == "table" and #CFG.Tower.Only > 0)
+		and "chỉ chạy tower trong Tower.Only"
+		or "gems + reroll / thời gian dự kiến"
 	if CFG.Tower.Mode == "fixed" then
 		chosen = reports[CFG.Tower.Fixed]
 		RT.towerWhy = "tower cố định, đã kiểm tra sức mạnh"
@@ -4134,6 +4377,30 @@ local function rewardTick()
 	end
 end
 
+-- Danh sách code = CFG.Codes.List + CodesConfig LIVE của game.
+-- Source 2026-10-06 có 17 code; game thêm code là bot tự nhập, khỏi sửa config.
+function Game.codeList()
+	local out, seen = {}, {}
+	for _, c in ipairs(CFG.Codes.List or {}) do
+		if type(c) == "string" and c ~= "" and not seen[c] then
+			seen[c] = true
+			out[#out + 1] = c
+		end
+	end
+	if CFG.Codes.UseGameList ~= false and type(Mods.CodesCfg) == "table" then
+		local extra = {}
+		for name, v in pairs(Mods.CodesCfg) do
+			if type(name) == "string" and type(v) == "table" and not seen[name] then
+				seen[name] = true
+				extra[#extra + 1] = name
+			end
+		end
+		table.sort(extra)
+		for _, c in ipairs(extra) do out[#out + 1] = c end
+	end
+	return out
+end
+
 local function codeTick()
 	if not (CFG.Codes.Enabled and Net.RedeemCode) then
 		RT.status.Codes = "tắt"
@@ -4143,9 +4410,10 @@ local function codeTick()
 	local tries = RT.codeTries
 	local maxTries = math.max(1, math.floor(tonumber(CFG.Codes.MaxTries) or 3))
 	local n, left, dead = 0, 0, 0
-	for _, code in ipairs(CFG.Codes.List or {}) do
-		-- Code sai thì RedeemedCodes không bao giờ có nó (MonetizationService.lua:297 chỉ
-		-- gửi thông báo lỗi), nên phải tự đếm để khỏi spam remote mỗi vòng.
+	local list = Game.codeList()
+	for _, code in ipairs(list) do
+		-- Code sai thì RedeemedCodes không bao giờ có nó (CodesService chỉ gửi
+		-- thông báo lỗi), nên phải tự đếm để khỏi spam remote mỗi vòng.
 		if not done[code] then
 			if (tries[code] or 0) < maxTries then
 				tries[code] = (tries[code] or 0) + 1
@@ -4158,7 +4426,7 @@ local function codeTick()
 		end
 	end
 	local nowDone = Util.data("RedeemedCodes", {}) or {}
-	for _, code in ipairs(CFG.Codes.List or {}) do
+	for _, code in ipairs(list) do
 		if not nowDone[code] then left = left + 1 end
 	end
 	if n > 0 then Util.log("Code", "nhập " .. n .. " code") end
@@ -4166,9 +4434,9 @@ local function codeTick()
 		RT.status.Codes = "đã nhận hết"
 	elseif dead > 0 then
 		RT.status.Codes = string.format("còn %d/%d (%d code không nhận được)",
-			left, #(CFG.Codes.List or {}), dead)
+			left, #list, dead)
 	else
-		RT.status.Codes = "còn " .. left .. "/" .. #(CFG.Codes.List or {})
+		RT.status.Codes = "còn " .. left .. "/" .. #list
 	end
 end
 
@@ -4409,6 +4677,16 @@ end)
 Keep.buildCeiling()
 Keep.tick()
 pcall(Performance.apply)
+-- Game có AutoTower GỐC (TowerController.lua:687): vào game 3 giây là client tự
+-- startTower nếu data AutoTower có tên -> đá nhau với vòng tower của kaitun.
+-- SetAutoTower(false) xoá tên đó (TowerService.lua:96) để chỉ còn kaitun chạy.
+if CFG.Tower.Enabled and CFG.Tower.DisableGameAuto ~= false and Net.SetAutoTower then
+	local cur = Util.data("AutoTower", "")
+	if type(cur) == "string" and cur ~= "" then
+		pcall(function() Net.SetAutoTower:FireServer(false) end)
+		Util.log("Tower", "tắt AutoTower của game (" .. cur .. ") để khỏi đá nhau")
+	end
+end
 UI.build()
 pcall(UI.buildOverlay)
 Util.log("KAITUN", "v" .. KT_VERSION .. " khởi động — " .. LP.Name)
@@ -4444,6 +4722,8 @@ loop("Plot",    function() return CFG.Plot.Interval end,    Plot.tick)
 loop("LevelUp", function() return CFG.LevelUp.Interval end, levelTick)
 loop("Sell",    function() return CFG.Sell.Interval end,    Sell.tick)
 loop("Economy", function() return CFG.Economy.Interval end, Eco.tick)
+loop("RebirthStats", function() return math.max(2, tonumber(CFG.RebirthStats.Interval) or 5) end, RebirthStats.tick)
+loop("Gear",    function() return math.max(2, tonumber(CFG.Gear.Interval) or 6) end, Gear.tick)
 loop("Tower",   function() return CFG.Tower.Interval end,   Tower.tick)
 loop("Quest",   function() return CFG.Quest.Interval end,   Quest.tick)
 loop("Rewards", function() return CFG.Rewards.Interval end, rewardTick)
@@ -4477,6 +4757,7 @@ getgenv().AnimeDiceKaitun = {
 	Mods = Mods,
 	-- để debug / gọi tay
 	Plot = Plot, Sell = Sell, Eco = Eco, Tower = Tower, Quest = Quest, Roll = Roll,
+	RebirthStats = RebirthStats, Gear = Gear,
 	Keep = Keep, Notice = Notice, TicketShop = TicketShop,
 	WorldCleanup = WorldCleanup, AccountSwap = AccountSwap, Watchdog = Watchdog,
 	UI = UI, Render = Render, Icon = Icon,
