@@ -320,8 +320,8 @@ local CFG = {
 		-- Source 2026-10-06: Jackpot Spin ĐÃ BỊ GỠ khỏi shop (thay bằng Reset Token
 		-- 50 vé). Lucky Spin còn, 10 vé / 1 cái.
 		-- Tên nào không có trong shop live thì bot kêu 1 lần rồi bỏ qua.
-		Items = { "Lucky Spin" }, -- đổi thành gì thì sửa danh sách này
-		Mode  = "rotate",        -- "rotate" = xoay vòng đều | "priority" = ưu tiên từ trên xuống
+		Items = { "Trait Reroll" }, -- đổi thành gì thì sửa danh sách này
+		Mode  = "priority",        -- "rotate" = xoay vòng đều | "priority" = ưu tiên từ trên xuống
 		AllowGamepass = false,   -- true mới cho đổi vé lấy gamepass (giá vé rất cao)
 	},
 
